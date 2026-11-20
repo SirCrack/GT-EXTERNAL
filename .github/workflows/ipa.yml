@@ -14,14 +14,26 @@ jobs:
       - name: Descargar proyecto
         uses: actions/checkout@v4
 
-      - name: Comprobar ZIP
+      - name: Extraer proyecto
         run: |
+          mkdir -p source
           unzip -o GT-EXTERNAL-proyecto-actualizado.zip -d source
-          find source -name "project.yml" -o -name "Proyecto.yml"
 
-      - name: Preparar XcodeGen
+      - name: Encontrar configuración
+        run: |
+          CONFIG=$(find source -type f \( -name "project.yml" -o -name "Proyecto.yml" \) | head -n 1)
+          if [ -z "$CONFIG" ]; then
+            echo "No se encontró el archivo de configuración"
+            exit 1
+          fi
+          DIR=$(dirname "$CONFIG")
+          cp "$CONFIG" "$DIR/project.yml"
+          echo "PROJECT_DIR=$DIR" >> "$GITHUB_ENV"
+
+      - name: Instalar XcodeGen
         run: brew install xcodegen
 
       - name: Generar proyecto
-        working-directory: source
-        run: xcodegen generate
+        run: |
+          cd "$PROJECT_DIR"
+          xcodegen generate
