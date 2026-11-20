@@ -34,21 +34,22 @@ jobs:
           APP_ID=$(/usr/libexec/PlistBuddy -c "Print :Entitlements:application-identifier" profile.plist)
           TEAM=$(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" profile.plist)
 
-          echo "Identificador permitido: $APP_ID"
           echo "Equipo: $TEAM"
+          echo "Se comprobó el perfil."
 
-          if [[ "$APP_ID" == "$TEAM.com.gtexternal.app" || "$APP_ID" == "$TEAM.*" ]]; then
-            echo "El perfil admite el identificador de GT EXTERNAL."
+          EXPECTED="$TEAM.app.lotus5042.comet881"
+
+          if [ "$APP_ID" = "$EXPECTED" ] || [ "$APP_ID" = "$TEAM.*" ]; then
+            echo "Perfil compatible con GT EXTERNAL."
           else
-            echo "El perfil no coincide con com.gtexternal.app."
+            echo "El identificador no coincide."
             exit 1
           fi
 
           if /usr/libexec/PlistBuddy -c "Print :ProvisionedDevices" profile.plist >/dev/null 2>&1; then
-            echo "El perfil incluye dispositivos registrados."
+            echo "Perfil con dispositivos registrados."
           else
             echo "El perfil no contiene una lista de dispositivos."
-            echo "Puede ser un perfil de distribución distinto de Ad Hoc."
           fi
 
       - name: Comprobar certificado
@@ -65,4 +66,3 @@ jobs:
             -P "$PASSWORD" \
             -A
           echo "El certificado se pudo importar."
-
