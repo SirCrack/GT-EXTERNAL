@@ -1,0 +1,50 @@
+
+name: GT EXTERNAL - Build iOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build GT EXTERNAL
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract project
+        run: |
+          mkdir -p source
+          unzip -o GT-EXTERNAL-proyecto-actualizado.zip -d source
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: source
+        run: xcodegen generate
+
+      - name: Build iOS Simulator
+        working-directory: source
+        run: |
+          xcodebuild \
+            -project GT-EXTERNAL.xcodeproj \
+            -scheme GT-EXTERNAL \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: GT-EXTERNAL-BUILD
+          path: source/build/Build/Products/Debug-iphonesimulator/
+          if-no-files-found: error
