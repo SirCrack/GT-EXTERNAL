@@ -1,4 +1,3 @@
-
 name: GT EXTERNAL - iOS Build
 
 on:
@@ -10,6 +9,7 @@ permissions:
 jobs:
   build:
     runs-on: macos-15
+
     steps:
       - name: Descargar repositorio
         uses: actions/checkout@v4
@@ -48,4 +48,3 @@ jobs:
         with:
           name: GT-EXTERNAL-BUILD
           path: source/build/Build/Products/Debug-iphonesimulator/
-
