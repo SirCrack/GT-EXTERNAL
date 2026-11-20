@@ -1,5 +1,5 @@
 
-name: GT EXTERNAL - IPA
+name: GT EXTERNAL - Verificar firma
 
 on:
   workflow_dispatch:
@@ -8,40 +8,61 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  verify:
     runs-on: macos-15
 
     steps:
-      - name: Descargar proyecto
-        uses: actions/checkout@v4
-
-      - name: Extraer proyecto
+      - name: Comprobar secretos
+        env:
+          P12: ${{ secrets.IOS_P12_BASE64 }}
+          PROFILE: ${{ secrets.IOS_MOBILEPROVISION_BASE64 }}
+          PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
         run: |
-          mkdir -p source
-          unzip -o GT-EXTERNAL-proyecto-actualizado.zip -d source
+          test -n "$P12" || { echo "Falta IOS_P12_BASE64"; exit 1; }
+          test -n "$PROFILE" || { echo "Falta IOS_MOBILEPROVISION_BASE64"; exit 1; }
+          test -n "$PASSWORD" || { echo "Falta IOS_P12_PASSWORD"; exit 1; }
+          echo "Los tres secretos están configurados."
 
-      - name: Encontrar configuración
+      - name: Revisar perfil
+        env:
+          PROFILE: ${{ secrets.IOS_MOBILEPROVISION_BASE64 }}
         run: |
-          CONFIG=$(find source -type f \( -name "project.yml" -o -name "Proyecto.yml" \) | head -n 1)
+          set -e
+          echo "$PROFILE" | base64 --decode > profile.mobileprovision
+          security cms -D -i profile.mobileprovision > profile.plist
 
-          if [ -z "$CONFIG" ]; then
-            echo "No se encontró el archivo de configuración"
+          APP_ID=$(/usr/libexec/PlistBuddy -c "Print :Entitlements:application-identifier" profile.plist)
+          TEAM=$(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" profile.plist)
+
+          echo "Identificador permitido: $APP_ID"
+          echo "Equipo: $TEAM"
+
+          if [[ "$APP_ID" == "$TEAM.com.gtexternal.app" || "$APP_ID" == "$TEAM.*" ]]; then
+            echo "El perfil admite el identificador de GT EXTERNAL."
+          else
+            echo "El perfil no coincide con com.gtexternal.app."
             exit 1
           fi
 
-          DIR=$(dirname "$CONFIG")
-
-          if [ "$CONFIG" != "$DIR/project.yml" ]; then
-            cp "$CONFIG" "$DIR/project.yml"
+          if /usr/libexec/PlistBuddy -c "Print :ProvisionedDevices" profile.plist >/dev/null 2>&1; then
+            echo "El perfil incluye dispositivos registrados."
+          else
+            echo "El perfil no contiene una lista de dispositivos."
+            echo "Puede ser un perfil de distribución distinto de Ad Hoc."
           fi
 
-          echo "PROJECT_DIR=$DIR" >> "$GITHUB_ENV"
-
-      - name: Instalar XcodeGen
-        run: brew install xcodegen
-
-      - name: Generar proyecto
+      - name: Comprobar certificado
+        env:
+          P12: ${{ secrets.IOS_P12_BASE64 }}
+          PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
         run: |
-          cd "$PROJECT_DIR"
-          xcodegen generate
-          ls -la
+          set -e
+          echo "$P12" | base64 --decode > certificate.p12
+          security create-keychain -p temporary build.keychain
+          security unlock-keychain -p temporary build.keychain
+          security import certificate.p12 \
+            -k build.keychain \
+            -P "$PASSWORD" \
+            -A
+          echo "El certificado se pudo importar."
+
