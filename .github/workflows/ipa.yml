@@ -1,1 +1,27 @@
+name: GT EXTERNAL - IPA
 
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Descargar proyecto
+        uses: actions/checkout@v4
+
+      - name: Comprobar ZIP
+        run: |
+          unzip -o GT-EXTERNAL-proyecto-actualizado.zip -d source
+          find source -name "project.yml" -o -name "Proyecto.yml"
+
+      - name: Preparar XcodeGen
+        run: brew install xcodegen
+
+      - name: Generar proyecto
+        working-directory: source
+        run: xcodegen generate
