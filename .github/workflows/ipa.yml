@@ -1,3 +1,4 @@
+
 name: GT EXTERNAL - IPA
 
 on:
@@ -22,14 +23,18 @@ jobs:
       - name: Encontrar configuración
         run: |
           CONFIG=$(find source -type f \( -name "project.yml" -o -name "Proyecto.yml" \) | head -n 1)
+
           if [ -z "$CONFIG" ]; then
             echo "No se encontró el archivo de configuración"
             exit 1
           fi
+
+          DIR=$(dirname "$CONFIG")
+
           if [ "$CONFIG" != "$DIR/project.yml" ]; then
-  cp "$CONFIG" "$DIR/project.yml"
-fi
-          cp "$CONFIG" "$DIR/project.yml"
+            cp "$CONFIG" "$DIR/project.yml"
+          fi
+
           echo "PROJECT_DIR=$DIR" >> "$GITHUB_ENV"
 
       - name: Instalar XcodeGen
@@ -39,3 +44,4 @@ fi
         run: |
           cd "$PROJECT_DIR"
           xcodegen generate
+          ls -la
