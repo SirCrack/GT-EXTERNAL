@@ -37,7 +37,7 @@ jobs:
           echo "Equipo: $TEAM"
           echo "Se comprobó el perfil."
 
-          EXPECTED="$TEAM.app.lotus5042.comet881"
+          EXPECTED="$TEAM.app.P323S9Q6D3.app.lotus5042.comet881"
 
           if [ "$APP_ID" = "$EXPECTED" ] || [ "$APP_ID" = "$TEAM.*" ]; then
             echo "Perfil compatible con GT EXTERNAL."
