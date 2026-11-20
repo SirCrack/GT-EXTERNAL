@@ -1,5 +1,5 @@
 
-name: GT EXTERNAL - Verificar firma
+name: GT EXTERNAL - IPA
 
 on:
   workflow_dispatch:
@@ -8,61 +8,54 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  build:
     runs-on: macos-15
 
     steps:
-      - name: Comprobar secretos
-        env:
-          P12: ${{ secrets.IOS_P12_BASE64 }}
-          PROFILE: ${{ secrets.IOS_MOBILEPROVISION_BASE64 }}
-          PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
+      - name: Descargar proyecto
+        uses: actions/checkout@v4
+
+      - name: Extraer proyecto
         run: |
-          test -n "$P12" || { echo "Falta IOS_P12_BASE64"; exit 1; }
-          test -n "$PROFILE" || { echo "Falta IOS_MOBILEPROVISION_BASE64"; exit 1; }
-          test -n "$PASSWORD" || { echo "Falta IOS_P12_PASSWORD"; exit 1; }
-          echo "Los tres secretos están configurados."
+          mkdir -p source
+          unzip -o GT-EXTERNAL-proyecto-actualizado.zip -d source
 
-      - name: Revisar perfil
-        env:
-          PROFILE: ${{ secrets.IOS_MOBILEPROVISION_BASE64 }}
+      - name: Preparar configuración
         run: |
-          set -e
-          echo "$PROFILE" | base64 --decode > profile.mobileprovision
-          security cms -D -i profile.mobileprovision > profile.plist
+          CONFIG=$(find source -type f \( -name "project.yml" -o -name "Proyecto.yml" \) | head -n 1)
 
-          APP_ID=$(/usr/libexec/PlistBuddy -c "Print :Entitlements:application-identifier" profile.plist)
-          TEAM=$(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" profile.plist)
-
-          echo "Equipo: $TEAM"
-          echo "Se comprobó el perfil."
-
-          EXPECTED="$TEAM.app.P323S9Q6D3.app.lotus5042.comet881"
-
-          if [ "$APP_ID" = "$EXPECTED" ] || [ "$APP_ID" = "$TEAM.*" ]; then
-            echo "Perfil compatible con GT EXTERNAL."
-          else
-            echo "El identificador no coincide."
+          if [ -z "$CONFIG" ]; then
+            echo "No se encontró Proyecto.yml"
             exit 1
           fi
 
-          if /usr/libexec/PlistBuddy -c "Print :ProvisionedDevices" profile.plist >/dev/null 2>&1; then
-            echo "Perfil con dispositivos registrados."
-          else
-            echo "El perfil no contiene una lista de dispositivos."
-          fi
+          PROJECT_DIR=$(dirname "$CONFIG")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Comprobar certificado
-        env:
-          P12: ${{ secrets.IOS_P12_BASE64 }}
-          PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
+          grep -n "PRODUCT_BUNDLE_IDENTIFIER\|bundleId" "$CONFIG" || true
+
+      - name: Instalar XcodeGen
+        run: brew install xcodegen
+
+      - name: Generar proyecto
         run: |
-          set -e
-          echo "$P12" | base64 --decode > certificate.p12
-          security create-keychain -p temporary build.keychain
-          security unlock-keychain -p temporary build.keychain
-          security import certificate.p12 \
-            -k build.keychain \
-            -P "$PASSWORD" \
-            -A
-          echo "El certificado se pudo importar."
+          cd "$PROJECT_DIR"
+          xcodegen generate
+
+      - name: Compilar aplicación
+        run: |
+          cd "$PROJECT_DIR"
+          xcodebuild \
+            -project GT-EXTERNAL.xcodeproj \
+            -scheme GT-EXTERNAL \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Guardar compilación
+        uses: actions/upload-artifact@v4
+        with:
+          name: GT-EXTERNAL-build
+          path: ${{ env.PROJECT_DIR }}/build/Build/Products/Release-iphoneos/
+
