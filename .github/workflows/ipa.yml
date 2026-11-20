@@ -1,5 +1,5 @@
 
-name: GT EXTERNAL - Generar IPA
+name: GT EXTERNAL - IPA sin firmar
 
 on:
   workflow_dispatch:
@@ -8,134 +8,83 @@ permissions:
   contents: read
 
 jobs:
-  build-ipa:
+  build:
     runs-on: macos-15
 
     steps:
-      - name: Descargar proyecto
+      - name: Descargar repositorio
         uses: actions/checkout@v4
 
-      - name: Preparar proyecto
+      - name: Extraer proyecto
         run: |
           set -e
           mkdir -p source
-          ZIP=$(find . -maxdepth 2 -name "*.zip" | head -1)
-          if [ -n "$ZIP" ]; then
-            unzip -q "$ZIP" -d source
-          else
+          ZIP=$(find . -maxdepth 2 -type f -name "*.zip" | head -1)
+          if [ -z "$ZIP" ]; then
             echo "No se encontró el ZIP del proyecto."
             exit 1
           fi
+          unzip -q "$ZIP" -d source
+
           CONFIG=$(find source \( -iname "project.yml" -o -iname "Proyecto.yml" \) | head -1)
-          test -n "$CONFIG"
-          DIR=$(dirname "$CONFIG")
-          if [ "$CONFIG" != "$DIR/project.yml" ]; then
-            cp "$CONFIG" "$DIR/project.yml"
+          if [ -z "$CONFIG" ]; then
+            echo "No se encontró project.yml."
+            exit 1
           fi
+
+          DIR=$(dirname "$CONFIG")
           echo "PROJECT_DIR=$DIR" >> "$GITHUB_ENV"
+          echo "Configuración encontrada: $CONFIG"
 
       - name: Instalar XcodeGen
         run: brew install xcodegen
 
       - name: Generar proyecto Xcode
         run: |
-          cd "$PROJECT_DIR"
-          xcodegen generate
-
-      - name: Comprobar certificado y perfil
-        env:
-          P12: ${{ secrets.IOS_P12_BASE64 }}
-          PROFILE: ${{ secrets.IOS_MOBILEPROVISION_BASE64 }}
-          PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
-        run: |
-          set -e
-          test -n "$P12"
-          test -n "$PROFILE"
-          test -n "$PASSWORD"
-
-          printf '%s' "$P12" | base64 --decode > certificate.p12
-          printf '%s' "$PROFILE" | base64 --decode > profile.mobileprovision
-
-          echo "Comprobando formato del certificado..."
-          openssl pkcs12 -in certificate.p12 \
-            -passin env:PASSWORD -info -noout
-
-          echo "Comprobando perfil..."
-          security cms -D -i profile.mobileprovision > profile.plist
-
-          APP_ID=$(/usr/libexec/PlistBuddy -c "Print :Entitlements:application-identifier" profile.plist)
-          TEAM=$(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" profile.plist)
-          UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" profile.plist)
-
-          echo "Identificador: $APP_ID"
-          echo "Equipo: $TEAM"
-          echo "PROFILE_UUID=$UUID" >> "$GITHUB_ENV"
-
-          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          cp profile.mobileprovision "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
-
-      - name: Importar certificado
-        env:
-          PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
-        run: |
-          set -e
-          security create-keychain -p temporary build.keychain
-          security unlock-keychain -p temporary build.keychain
-          security import certificate.p12 \
-            -k build.keychain \
-            -P "$PASSWORD" \
-            -A
-          security set-key-partition-list \
-            -S apple-tool:,apple: \
-            -s -k temporary build.keychain
-
-      - name: Archivar aplicación
-        run: |
           set -e
           cd "$PROJECT_DIR"
+          xcodegen generate --spec "$(find . -maxdepth 2 \( -name project.yml -o -name Proyecto.yml \) | head -1)"
+
+      - name: Compilar sin firma
+        run: |
+          set -e
+          PROJECT=$(find "$PROJECT_DIR" -maxdepth 2 -name "*.xcodeproj" | head -1)
+          test -n "$PROJECT"
+
           xcodebuild \
-            -project GT-EXTERNAL.xcodeproj \
+            -project "$PROJECT" \
             -scheme GT-EXTERNAL \
             -configuration Release \
             -sdk iphoneos \
-            -archivePath "$GITHUB_WORKSPACE/GT-EXTERNAL.xcarchive" \
-            CODE_SIGN_STYLE=Manual \
-            PROVISIONING_PROFILE="$PROFILE_UUID" \
-            archive
+            -derivedDataPath "$GITHUB_WORKSPACE/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
 
-      - name: Exportar IPA
+      - name: Crear IPA
         run: |
           set -e
-          cat > ExportOptions.plist <<'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key>
-            <string>ad-hoc</string>
-            <key>signingStyle</key>
-            <string>manual</string>
-            <key>provisioningProfiles</key>
-            <dict>
-              <key>app.lotus5042.comet881</key>
-              <string>PROFILE_UUID_PLACEHOLDER</string>
-            </dict>
-          </dict>
-          </plist>
-          EOF
+          APP=$(find "$GITHUB_WORKSPACE/DerivedData/Build/Products/Release-iphoneos" \
+            -maxdepth 1 -name "*.app" -print -quit)
 
-          /usr/libexec/PlistBuddy \
-            -c "Set :provisioningProfiles:app.lotus5042.comet881 $PROFILE_UUID" \
-            ExportOptions.plist
+          if [ -z "$APP" ] || [ ! -d "$APP" ]; then
+            echo "No se encontró la aplicación .app."
+            exit 1
+          fi
 
-          xcodebuild -exportArchive \
-            -archivePath "$GITHUB_WORKSPACE/GT-EXTERNAL.xcarchive" \
-            -exportPath "$GITHUB_WORKSPACE/IPA" \
-            -exportOptionsPlist ExportOptions.plist
+          mkdir -p "$GITHUB_WORKSPACE/Payload"
+          cp -R "$APP" "$GITHUB_WORKSPACE/Payload/"
+
+          cd "$GITHUB_WORKSPACE"
+          ditto -c -k --sequesterRsrc --keepParent \
+            Payload GT-EXTERNAL-unsigned.ipa
+
+          echo "IPA creada correctamente."
 
       - name: Guardar IPA
         uses: actions/upload-artifact@v4
         with:
           name: GT-EXTERNAL-IPA
-          path: IPA/*.ipa
+          path: GT-EXTERNAL-unsigned.ipa
           if-no-files-found: error
