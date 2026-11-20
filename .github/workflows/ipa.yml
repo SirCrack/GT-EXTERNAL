@@ -15,17 +15,18 @@ jobs:
       - name: Descargar proyecto
         uses: actions/checkout@v4
 
-      - name: Preparar archivos
+      - name: Preparar proyecto
         run: |
           set -e
-          mkdir source
+          mkdir -p source
           ZIP=$(find . -maxdepth 2 -name "*.zip" | head -1)
           if [ -n "$ZIP" ]; then
             unzip -q "$ZIP" -d source
           else
-            cp -R . source/project
+            echo "No se encontró el ZIP del proyecto."
+            exit 1
           fi
-          CONFIG=$(find source -iname "project.yml" -o -iname "Proyecto.yml" | head -1)
+          CONFIG=$(find source \( -iname "project.yml" -o -iname "Proyecto.yml" \) | head -1)
           test -n "$CONFIG"
           DIR=$(dirname "$CONFIG")
           if [ "$CONFIG" != "$DIR/project.yml" ]; then
@@ -41,24 +42,52 @@ jobs:
           cd "$PROJECT_DIR"
           xcodegen generate
 
-      - name: Instalar certificado y perfil
+      - name: Comprobar certificado y perfil
         env:
           P12: ${{ secrets.IOS_P12_BASE64 }}
           PROFILE: ${{ secrets.IOS_MOBILEPROVISION_BASE64 }}
           PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
         run: |
           set -e
+          test -n "$P12"
+          test -n "$PROFILE"
+          test -n "$PASSWORD"
+
           printf '%s' "$P12" | base64 --decode > certificate.p12
           printf '%s' "$PROFILE" | base64 --decode > profile.mobileprovision
+
+          echo "Comprobando formato del certificado..."
+          openssl pkcs12 -in certificate.p12 \
+            -passin env:PASSWORD -info -noout
+
+          echo "Comprobando perfil..."
+          security cms -D -i profile.mobileprovision > profile.plist
+
+          APP_ID=$(/usr/libexec/PlistBuddy -c "Print :Entitlements:application-identifier" profile.plist)
+          TEAM=$(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" profile.plist)
+          UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" profile.plist)
+
+          echo "Identificador: $APP_ID"
+          echo "Equipo: $TEAM"
+          echo "PROFILE_UUID=$UUID" >> "$GITHUB_ENV"
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp profile.mobileprovision "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
+
+      - name: Importar certificado
+        env:
+          PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
+        run: |
+          set -e
           security create-keychain -p temporary build.keychain
           security unlock-keychain -p temporary build.keychain
-          security import certificate.p12 -k build.keychain -P "$PASSWORD" -A
-          security cms -D -i profile.mobileprovision > profile.plist
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" profile.plist)
-          cp profile.mobileprovision "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
-          echo "PROFILE_UUID=$UUID" >> "$GITHUB_ENV"
-          echo "Certificado y perfil instalados."
+          security import certificate.p12 \
+            -k build.keychain \
+            -P "$PASSWORD" \
+            -A
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s -k temporary build.keychain
 
       - name: Archivar aplicación
         run: |
@@ -89,12 +118,16 @@ jobs:
             <key>provisioningProfiles</key>
             <dict>
               <key>app.lotus5042.comet881</key>
-              <string>$PROFILE_UUID</string>
+              <string>PROFILE_UUID_PLACEHOLDER</string>
             </dict>
           </dict>
           </plist>
           EOF
-          /usr/libexec/PlistBuddy -c "Set :provisioningProfiles:app.lotus5042.comet881 $PROFILE_UUID" ExportOptions.plist
+
+          /usr/libexec/PlistBuddy \
+            -c "Set :provisioningProfiles:app.lotus5042.comet881 $PROFILE_UUID" \
+            ExportOptions.plist
+
           xcodebuild -exportArchive \
             -archivePath "$GITHUB_WORKSPACE/GT-EXTERNAL.xcarchive" \
             -exportPath "$GITHUB_WORKSPACE/IPA" \
