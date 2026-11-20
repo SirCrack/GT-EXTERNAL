@@ -1,5 +1,5 @@
 
-name: GT EXTERNAL - IPA
+name: GT EXTERNAL - IPA Firmada
 
 on:
   workflow_dispatch:
@@ -19,20 +19,13 @@ jobs:
         run: |
           mkdir -p source
           unzip -o GT-EXTERNAL-proyecto-actualizado.zip -d source
-
-      - name: Preparar configuración
-        run: |
           CONFIG=$(find source -type f \( -name "project.yml" -o -name "Proyecto.yml" \) | head -n 1)
-
-          if [ -z "$CONFIG" ]; then
-            echo "No se encontró Proyecto.yml"
-            exit 1
-          fi
-
+          test -n "$CONFIG"
           PROJECT_DIR=$(dirname "$CONFIG")
+          if [ "$CONFIG" != "$PROJECT_DIR/project.yml" ]; then
+            cp "$CONFIG" "$PROJECT_DIR/project.yml"
+          fi
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-          grep -n "PRODUCT_BUNDLE_IDENTIFIER\|bundleId" "$CONFIG" || true
 
       - name: Instalar XcodeGen
         run: brew install xcodegen
@@ -42,20 +35,111 @@ jobs:
           cd "$PROJECT_DIR"
           xcodegen generate
 
-      - name: Compilar aplicación
+      - name: Preparar certificado y perfil
+        env:
+          P12: ${{ secrets.IOS_P12_BASE64 }}
+          PROFILE: ${{ secrets.IOS_MOBILEPROVISION_BASE64 }}
+          PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
+        run: |
+          set -e
+
+          echo "$P12" | base64 --decode > certificate.p12
+          echo "$PROFILE" | base64 --decode > profile.mobileprovision
+
+          security create-keychain -p temporary build.keychain
+          security unlock-keychain -p temporary build.keychain
+          security import certificate.p12 \
+            -k build.keychain \
+            -P "$PASSWORD" \
+            -A
+
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k temporary build.keychain
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          security cms -D -i profile.mobileprovision > profile.plist
+
+          UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" profile.plist)
+          TEAM=$(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" profile.plist)
+          APP_ID=$(/usr/libexec/PlistBuddy -c "Print :Entitlements:application-identifier" profile.plist)
+
+          echo "Equipo: $TEAM"
+          echo "Perfil: $UUID"
+
+          if [ "$APP_ID" != "$TEAM.app.lotus5042.comet881" ]; then
+            echo "El perfil no coincide con GT EXTERNAL."
+            exit 1
+          fi
+
+          cp profile.mobileprovision \
+            "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
+
+          echo "TEAM=$TEAM" >> "$GITHUB_ENV"
+          echo "PROFILE_UUID=$UUID" >> "$GITHUB_ENV"
+
+      - name: Detectar identidad de firma
+        run: |
+          security list-keychains -d user -s build.keychain
+          security find-identity -v -p codesigning build.keychain
+
+          if security find-identity -v -p codesigning build.keychain | grep -q "Apple Distribution"; then
+            echo 'SIGN_ID=Apple Distribution' >> "$GITHUB_ENV"
+            echo 'EXPORT_METHOD=ad-hoc' >> "$GITHUB_ENV"
+          elif security find-identity -v -p codesigning build.keychain | grep -q "Apple Development"; then
+            echo 'SIGN_ID=Apple Development' >> "$GITHUB_ENV"
+            echo 'EXPORT_METHOD=development' >> "$GITHUB_ENV"
+          else
+            echo "No se encontró una identidad de firma compatible."
+            exit 1
+          fi
+
+      - name: Crear archivo firmado
         run: |
           cd "$PROJECT_DIR"
-          xcodebuild \
+
+          xcodebuild archive \
             -project GT-EXTERNAL.xcodeproj \
             -scheme GT-EXTERNAL \
-            -sdk iphoneos \
-            -configuration Release \
-            -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/GT-EXTERNAL.xcarchive" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$TEAM" \
+            PRODUCT_BUNDLE_IDENTIFIER=app.lotus5042.comet881 \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID" \
+            CODE_SIGN_IDENTITY="$SIGN_ID"
 
-      - name: Guardar compilación
+      - name: Exportar IPA
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>$EXPORT_METHOD</string>
+            <key>teamID</key>
+            <string>$TEAM</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>app.lotus5042.comet881</key>
+              <string>$PROFILE_UUID</string>
+            </dict>
+          </dict>
+          </plist>
+          EOF
+
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/GT-EXTERNAL.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
+
+      - name: Guardar IPA
         uses: actions/upload-artifact@v4
         with:
-          name: GT-EXTERNAL-build
-          path: ${{ env.PROJECT_DIR }}/build/Build/Products/Release-iphoneos/
+          name: GT-EXTERNAL-IPA
+          path: ${{ runner.temp }}/export/*.ipa
+          if-no-files-found: error
 
