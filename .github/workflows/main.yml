@@ -1,0 +1,50 @@
+name: GT EXTERNAL - iOS Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Comprobar archivos
+        run: |
+          echo "Revisando archivos..."
+          ls -la
+          find . -maxdepth 3 -type f
+
+      - name: Extraer proyecto
+        run: |
+          mkdir -p source
+          unzip -o GT-EXTERNAL-proyecto-actualizado.zip -d source
+
+      - name: Instalar XcodeGen
+        run: brew install xcodegen
+
+      - name: Generar proyecto
+        working-directory: source
+        run: xcodegen generate
+
+      - name: Compilar GT EXTERNAL
+        working-directory: source
+        run: |
+          xcodebuild \
+            -project GT-EXTERNAL.xcodeproj \
+            -scheme GT-EXTERNAL \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Guardar compilación
+        uses: actions/upload-artifact@v4
+        with:
+          name: GT-EXTERNAL-BUILD
+          path: source/build/Build/Products/Debug-iphonesimulator/
